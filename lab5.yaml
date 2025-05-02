@@ -2,14 +2,9 @@
   hosts: localhost
   connection: local
   vars:
-    terraform_rc_path: .terraformrc
     terraform_path: ./tf
   tasks:
-    - name: Prepare TF (set yandex mirror)
-      copy:
-        src: "{{ terraform_rc_path }}"
-        dest: ~/.terraformrc
-
+    
     - name: Run terraform
       environment:
         TF_VAR_user_name: "{{ lookup('env', 'TF_VAR_user_name') }}"
