@@ -48,7 +48,7 @@ resource "openstack_compute_instance_v2" "brezgina_server" {
   image_name = var.image_name
   flavor_name = var.server_flavor
   key_pair = var.key_pair
-  security_groups = [openstack_networking_secgroup_v2.sg.name]
+  security_group_ids = [openstack_networking_secgroup_v2.sg.id]
 
   network {
     name = var.network_name
