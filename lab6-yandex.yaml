@@ -1,0 +1,157 @@
+- name: Create production server
+  hosts: localhost
+  connection: local
+  vars:
+    terraform_rc_path: .terraformrc
+    terraform_path: /home/ubuntu/tf-yandex
+  tasks:
+    - name: Prepare TF (set yandex mirror)
+      copy:
+        src: "{{ terraform_rc_path }}"
+        dest: ~/.terraformrc
+
+    - name: Initialize Terraform
+      command: terraform init -upgrade
+      args:
+        chdir: "{{ terraform_path }}"  # Укажите путь к директории с Terraform-конфигами
+      environment:
+        TF_VAR_yc_token: "{{ lookup('env', 'YC_TOKEN') }}"
+        TF_VAR_yc_cloud_id: "{{ lookup('env', 'YC_CLOUD_ID') }}"
+        TF_VAR_yc_folder_id: "{{ lookup('env', 'YC_FOLDER_ID') }}"
+
+    - name: Set proper permissions for yc_vars.sh
+      file:
+        path: "{{ terraform_path }}/yc_vars.sh"
+        mode: '0755'
+      become: no
+
+    - name: Run terraform
+      environment:
+        TF_VAR_yc_token: "{{ lookup('env', 'YC_TOKEN') }}"
+        TF_VAR_yc_cloud_id: "{{ lookup('env', 'YC_CLOUD_ID') }}"
+        TF_VAR_yc_folder_id: "{{ lookup('env', 'YC_FOLDER_ID') }}"
+      terraform:
+        project_path: "{{ terraform_path }}"
+        force_init: yes
+        state: present
+      register: trfrm
+
+    - name: Export server IP up
+      lineinfile:
+        path: ~/myenv
+        regexp: '^DEPLOYMENT_SERVER_IP='
+        line: "DEPLOYMENT_SERVER_IP={{ trfrm.outputs.servers.value.serverip }}"
+        mode: '0644'
+        create: yes
+
+    - name: Add instance host (Ansible term)
+      add_host:
+        name: brezgina-server
+        groups: nodes
+        ansible_ssh_user: ubuntu
+        ansible_host: "{{ trfrm.outputs.servers.value.serverip }}"
+        ansible_ssh_private_key_file: "/home/ubuntu/.ssh/id_ed25519"
+        ansible_ssh_common_args: >-
+          -o StrictHostKeyChecking=no
+          -o UserKnownHostsFile=/dev/null
+          -o IdentitiesOnly=yes
+
+- name: Wait for instance creating
+  hosts: localhost
+  connection: local     
+  
+  tasks:
+    - name: Wait for a ssh port become available
+      wait_for:
+        host: "{{ trfrm.outputs.servers.value.serverip }}"
+        port: 22
+
+- name: Prepare production for deploy
+  hosts: brezgina-server
+  vars:
+    service_path: botserver.service
+    terraform_path: tf
+  tasks:
+    - block:
+      - name: Update apt cache
+        apt:
+          update_cache: yes
+        become: yes
+        async: 300  # 5 минут максимум
+        
+      - name: Add NodeSource GPG key
+        apt_key:
+          url: https://deb.nodesource.com/gpgkey/nodesource.gpg.key
+          state: present
+        become: yes
+      
+      - name: Add NodeSource APT repository
+        ansible.builtin.apt_repository:
+          repo: "deb https://deb.nodesource.com/node_18.x {{ ansible_distribution_release }} main"
+          state: present
+          filename: nodesource
+        become: yes
+    
+      - name: Update apt cache
+        apt:
+          update_cache: yes
+        become: yes
+        async: 300  # 5 минут максимум
+
+      - name: Install Node.js
+        apt:
+          name: nodejs
+          state: present
+        become: yes
+        timeout: 600  # 10 минут на выполнение
+        register: node_install
+        until: node_install is succeeded
+        retries: 3
+        delay: 30
+        
+      - name: Install LocalTunnel globally
+        npm:
+          name: localtunnel
+          global: yes
+        become: yes
+        
+      - name: Add OpenJDK GPG key (без PPA)
+        apt_key:
+          url: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xF7C313DB11F1ED148BB5117C08B3810CB7017B89"
+          state: present
+        become: yes
+
+      - name: Add OpenJDK 21 repository manually
+        apt_repository:
+          repo: "deb [arch=amd64] https://ppa.launchpadcontent.net/openjdk-r/ppa/ubuntu {{ ansible_distribution_release }} main"
+          state: present
+          filename: "openjdk-21"  # Создает /etc/apt/sources.list.d/openjdk-21.list
+        become: yes
+            
+      - name: Install JDK
+        apt:
+          update_cache: yes
+          name: openjdk-21-jdk-headless
+          state: present
+        become: yes
+
+      - name: Create bot app service
+        copy:
+          src: "{{ service_path }}"
+          dest: /etc/systemd/system/botserver.service
+          mode: '0644'
+        become: yes
+          
+      - name: Reload services
+        systemd:
+          daemon_reload: true
+          name: botserver
+          state: stopped
+        become: yes
+   
+      rescue:
+       - name: Clean up resources in case of error
+         terraform:
+           project_path: "{{ terraform_path }}"
+           state: absent
+         delegate_to: localhost
