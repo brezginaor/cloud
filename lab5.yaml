@@ -72,7 +72,7 @@
   hosts: nodes
   become: yes
   vars:
-    service_file: "{{ playbook_dir }}/files/botserver.service"
+    service_file: "{{ playbook_dir }}/botserver.service"
   tasks:
     - name: Update apt cache
       apt:
