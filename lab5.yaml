@@ -12,6 +12,7 @@
       terraform:
         project_path: "{{ terraform_path }}"
         force_init: yes
+        init_args: "-upgrade"
         state: present
       register: trfrm
 
