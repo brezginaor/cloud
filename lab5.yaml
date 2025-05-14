@@ -4,7 +4,7 @@
   vars:
     terraform_path: ./tf
   tasks:
-    
+
     - name: Run terraform
       environment:
         TF_VAR_user_name: "{{ lookup('env', 'TF_VAR_user_name') }}"
@@ -34,8 +34,8 @@
 
 - name: Wait for instance creating
   hosts: localhost
-  connection: local     
-  
+  connection: local
+
   tasks:
     - name: Wait for a ssh port become available
       wait_for:
@@ -49,64 +49,103 @@
     terraform_path: tf
   tasks:
     - block:
-      - name: Update apt cache
-        apt:
-          update_cache: yes
-        become: yes
-        async: 300  # 5 минут максимум
-        
-      - name: Install Node.js and npm
-        apt:
-          name:
-            - nodejs
-            - npm
-          state: present
-          update_cache: yes
-        become: yes
+        - name: Update apt cache
+          apt:
+            update_cache: yes
+          become: yes
+          async: 300
 
-      - name: Install LocalTunnel globally
-        npm:
-          name: localtunnel
-          global: yes
-        become: yes
-        
-      - name: Add OpenJDK GPG key (без PPA)
-        apt_key:
-          url: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xF7C313DB11F1ED148BB5117C08B3810CB7017B89"
-          state: present
-        become: yes
+        - name: Install Node.js and npm
+          apt:
+            name:
+              - nodejs
+              - npm
+            state: present
+            update_cache: yes
+          become: yes
 
-      - name: Add OpenJDK 21 repository manually
-        apt_repository:
-          repo: "deb [arch=amd64] https://ppa.launchpadcontent.net/openjdk-r/ppa/ubuntu {{ ansible_distribution_release }} main"
-          state: present
-          filename: "openjdk-21"  # Создает /etc/apt/sources.list.d/openjdk-21.list
-        become: yes
-            
-      - name: Install JDK
-        apt:
-          update_cache: yes
-          name: openjdk-21-jdk-headless
-          state: present
-        become: yes
+        - name: Install LocalTunnel globally
+          npm:
+            name: localtunnel
+            global: yes
+          become: yes
 
-      - name: Create bot app service
-        copy:
-          src: "{{ service_path }}"
-          dest: /etc/systemd/system/botserver.service
-          mode: '0644'
-        become: yes
-          
-      - name: Reload services
-        systemd:
-          daemon_reload: true
-          name: botserver
-          state: stopped
-        become: yes
-   
+        - name: Create LocalTunnel systemd unit
+          copy:
+            dest: /etc/systemd/system/localtunnel.service
+            content: |
+              [Unit]
+              Description=LocalTunnel for Telegram Bot
+              After=network.target
+
+              [Service]
+              Type=simple
+              User=ubuntu
+              ExecStart=/usr/bin/lt --port 8081 --subdomain mybot
+              Restart=always
+
+              [Install]
+              WantedBy=multi-user.target
+          become: yes
+
+        - name: Enable and start LocalTunnel service
+          systemd:
+            name: localtunnel
+            enabled: yes
+            state: restarted
+          become: yes
+
+        - name: Add OpenJDK GPG key (без PPA)
+          apt_key:
+            url: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xF7C313DB11F1ED148BB5117C08B3810CB7017B89"
+            state: present
+          become: yes
+
+        - name: Add OpenJDK 21 repository manually
+          apt_repository:
+            repo: "deb [arch=amd64] https://ppa.launchpadcontent.net/openjdk-r/ppa/ubuntu {{ ansible_distribution_release }} main"
+            state: present
+            filename: "openjdk-21"
+          become: yes
+
+        - name: Install JDK
+          apt:
+            update_cache: yes
+            name: openjdk-21-jdk-headless
+            state: present
+          become: yes
+
+        - name: Copy bot JAR to server
+          copy:
+            src: "../CurrencyConverterBot/target/CurrencyConverterBot-1.0-SNAPSHOT-jar-with-dependencies.jar"
+            dest: /home/ubuntu/bot.jar
+            mode: '0755'
+          become: yes
+
+        - name: Copy application.properties
+          copy:
+            src: "../application.properties"
+            dest: /home/ubuntu/application.properties
+            mode: '0644'
+          become: yes
+
+        - name: Create bot app service
+          copy:
+            src: "{{ service_path }}"
+            dest: /etc/systemd/system/botserver.service
+            mode: '0644'
+          become: yes
+
+        - name: Reload services
+          systemd:
+            daemon_reload: true
+            name: botserver
+            state: stopped
+          become: yes
+
       rescue:
-       - name: Clean up resources in case of error
-         terraform:
-           project_path: "{{ terraform_path }}"
-           state: absent
-         delegate_to: localhost
+        - name: Clean up resources in case of error
+          terraform:
+            project_path: "{{ terraform_path }}"
+            state: absent
+          delegate_to: localhost
