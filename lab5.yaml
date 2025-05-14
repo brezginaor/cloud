@@ -1,62 +1,75 @@
+---
 - name: Create production server
   hosts: localhost
   connection: local
   vars:
     terraform_path: "{{ playbook_dir }}/tf"
-    tf_vars:
-      TF_VAR_user_name: "{{ lookup('env','TF_VAR_user_name') }}"
-      TF_VAR_password: "{{ lookup('env','TF_VAR_password') }}"
+    tf_env:
+      TF_VAR_user_name: "{{ lookup('env', 'TF_VAR_user_name') }}"
+      TF_VAR_password:  "{{ lookup('env', 'TF_VAR_password') }}"
   tasks:
-    - name: Terraform init with upgrade
-      command: terraform init -input=false -upgrade
-      args:
-        chdir: "{{ terraform_path }}"
-      environment: "{{ tf_vars }}"
+    - name: Provision infra with Terraform
+      block:
+        - name: Terraform init with upgrade
+          command: terraform init -input=false -upgrade
+          args:
+            chdir: "{{ terraform_path }}"
+          environment: "{{ tf_env }}"
 
-    - name: Terraform apply to create infrastructure
-      command: >
-        terraform apply -auto-approve
-        -var "user_name={{ tf_vars.TF_VAR_user_name }}"
-        -var "password={{ tf_vars.TF_VAR_password }}"
-      args:
-        chdir: "{{ terraform_path }}"
-      environment: "{{ tf_vars }}"
-      register: tf_apply
+        - name: Terraform apply (create server)
+          command: >
+            terraform apply -auto-approve
+            -var "user_name={{ tf_env.TF_VAR_user_name }}"
+            -var "password={{ tf_env.TF_VAR_password }}"
+          args:
+            chdir: "{{ terraform_path }}"
+          environment: "{{ tf_env }}"
 
-    - name: Get server IP address
-      command: terraform output -raw servers.serverip
-      args:
-        chdir: "{{ terraform_path }}"
-      register: tf_output
+        - name: Get server IP
+          command: terraform output -raw servers.serverip
+          args:
+            chdir: "{{ terraform_path }}"
+          register: tf_output
 
-    - name: Export server IP
-      lineinfile:
-        dest: ~/myenv
-        regexp: '^DEPLOYMENT_SERVER_IP='
-        line: "DEPLOYMENT_SERVER_IP={{ tf_output.stdout }}"
-        create: yes
+        - name: Export server IP to myenv
+          lineinfile:
+            path: ~/myenv
+            regexp: '^DEPLOYMENT_SERVER_IP='
+            line: "DEPLOYMENT_SERVER_IP={{ tf_output.stdout }}"
+            create: yes
 
-    - name: Add production host to inventory
-      add_host:
-        name: brezgina-server
-        groups: nodes
-        ansible_host: "{{ tf_output.stdout }}"
-        ansible_user: ubuntu
-        ansible_ssh_private_key_file: ~/.ssh/2025-key-brezgina
-        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+        - name: Add instance to inventory
+          add_host:
+            name: brezgina-server
+            groups: nodes
+            ansible_host: "{{ tf_output.stdout }}"
+            ansible_user: ubuntu
+            ansible_ssh_private_key_file: ~/.ssh/2025-key-brezgina
+            ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      rescue:
+        - name: Destroy Terraform-managed infra on failure
+          command: terraform destroy -auto-approve
+          args:
+            chdir: "{{ terraform_path }}"
+
+    - name: Record server_ip fact
+      set_fact:
+        server_ip: "{{ tf_output.stdout }}"
 
 - name: Wait for instance to be ready
   hosts: localhost
   connection: local
+  vars:
+    ip: "{{ server_ip }}"
   tasks:
-    - name: Wait for SSH port
+    - name: Wait until SSH is up
       wait_for:
-        host: "{{ tf_output.stdout }}"
+        host: "{{ ip }}"
         port: 22
         timeout: 300
 
 - name: Prepare production for deploy
-  hosts: brezgina-server
+  hosts: nodes
   become: yes
   vars:
     service_file: "{{ playbook_dir }}/files/botserver.service"
@@ -67,7 +80,7 @@
 
     - name: Install Node.js and npm
       apt:
-        pkg:
+        name:
           - nodejs
           - npm
         state: present
@@ -103,18 +116,23 @@
 
     - name: Add OpenJDK GPG key
       apt_key:
-        url: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xF7C313DB11F1ED148BB5117C08B3810CB7017B89"
+        url: >
+          https://keyserver.ubuntu.com/pks/lookup
+          ?op=get&search=0xF7C313DB11F1ED148BB5117C08B3810CB7017B89
         state: present
 
-    - name: Add OpenJDK 21 repository manually
+    - name: Add OpenJDK 21 repository
       apt_repository:
-        repo: "deb [arch=amd64] https://ppa.launchpadcontent.net/openjdk-r/ppa/ubuntu {{ ansible_distribution_release }} main"
+        repo: >
+          deb [arch=amd64]
+          https://ppa.launchpadcontent.net/openjdk-r/ppa/ubuntu
+          {{ ansible_distribution_release }} main
         filename: openjdk-21
         state: present
 
     - name: Install OpenJDK 21
       apt:
-        pkg: openjdk-21-jdk-headless
+        name: openjdk-21-jdk-headless
         state: present
         update_cache: yes
 
@@ -141,9 +159,3 @@
         daemon_reload: yes
         name: botserver
         state: restarted
-
-  rescue:
-    - name: Clean up resources on failure
-      command: terraform destroy -auto-approve
-      args:
-        chdir: "{{ playbook_dir }}/tf"
