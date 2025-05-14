@@ -137,13 +137,13 @@
 
     - name: Copy bot JAR to server
       copy:
-        src: "../CurrencyConverterBot/target/CurrencyConverterBot-1.0-SNAPSHOT-jar-with-dependencies.jar"
+        src: "{{ playbook_dir }}/bot.jar"
         dest: /home/ubuntu/bot.jar
         mode: '0755'
 
     - name: Copy application.properties
       copy:
-        src: "../application.properties"
+        src: "{{ playbook_dir }}/application.properties"
         dest: /home/ubuntu/application.properties
         mode: '0644'
 
