@@ -1,12 +1,12 @@
 terraform {
   # Минимальная требуемая версия Terraform
   required_version = ">= 0.14.0"
-  
+
   # Настройка необходимых провайдеров
   required_providers {
     openstack = {
-      source  = "terraform-provider-openstack/openstack"  # Источник провайдера
-      version = "~> 1.39.0"  # Версия провайдера (примерно 1.39.0)
+     source  = "terraform-provider-openstack/openstack"
+     version = "1.49.0"
     }
   }
 }
@@ -34,7 +34,7 @@ resource "openstack_networking_secgroup_v2" "sg" {
 # https://registry.terraform.io/providers/terraform-provider-openstack/openstack/latest/docs/resources/networking_secgroup_rule_v2
 resource "openstack_networking_secgroup_rule_v2" "sg_ssh_rule" {
   direction = "ingress" # Направление трафика (входящий)
-  ethertype = "IPv4" 
+  ethertype = "IPv4"
   protocol = "tcp"
   port_range_min = 22
   port_range_max = 22
@@ -48,7 +48,7 @@ resource "openstack_compute_instance_v2" "brezgina_server" {
   image_name = var.image_name
   flavor_name = var.server_flavor
   key_pair = var.key_pair
-  security_groups    = [openstack_networking_secgroup_v2.sg.name]
+  security_groups = [openstack_networking_secgroup_v2.sg.name]
 
   network {
     name = var.network_name
