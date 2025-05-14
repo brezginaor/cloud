@@ -2,151 +2,148 @@
   hosts: localhost
   connection: local
   vars:
-    terraform_path: ./tf
+    terraform_path: "{{ playbook_dir }}/tf"
+    tf_vars:
+      TF_VAR_user_name: "{{ lookup('env','TF_VAR_user_name') }}"
+      TF_VAR_password: "{{ lookup('env','TF_VAR_password') }}"
   tasks:
+    - name: Terraform init with upgrade
+      command: terraform init -input=false -upgrade
+      args:
+        chdir: "{{ terraform_path }}"
+      environment: "{{ tf_vars }}"
 
-    - name: Run terraform
-      environment:
-        TF_VAR_user_name: "{{ lookup('env', 'TF_VAR_user_name') }}"
-        TF_VAR_password: "{{ lookup('env', 'TF_VAR_password') }}"
-      terraform:
-        project_path: "{{ terraform_path }}"
-        force_init: yes
-        init_args: "-upgrade"
-        state: present
-      register: trfrm
+    - name: Terraform apply to create infrastructure
+      command: >
+        terraform apply -auto-approve
+        -var "user_name={{ tf_vars.TF_VAR_user_name }}"
+        -var "password={{ tf_vars.TF_VAR_password }}"
+      args:
+        chdir: "{{ terraform_path }}"
+      environment: "{{ tf_vars }}"
+      register: tf_apply
 
-    - name: Export server IP up
+    - name: Get server IP address
+      command: terraform output -raw servers.serverip
+      args:
+        chdir: "{{ terraform_path }}"
+      register: tf_output
+
+    - name: Export server IP
       lineinfile:
-        path: ~/myenv
+        dest: ~/myenv
         regexp: '^DEPLOYMENT_SERVER_IP='
-        line: "DEPLOYMENT_SERVER_IP={{ trfrm.outputs.servers.value.serverip }}"
-        mode: '0644'
+        line: "DEPLOYMENT_SERVER_IP={{ tf_output.stdout }}"
         create: yes
 
-    - name: Add instance host (Ansible term)
+    - name: Add production host to inventory
       add_host:
         name: brezgina-server
         groups: nodes
-        ansible_ssh_user: ubuntu
-        ansible_host: "{{ trfrm.outputs.servers.value.serverip }}"
+        ansible_host: "{{ tf_output.stdout }}"
+        ansible_user: ubuntu
         ansible_ssh_private_key_file: ~/.ssh/2025-key-brezgina
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
 
-- name: Wait for instance creating
+- name: Wait for instance to be ready
   hosts: localhost
   connection: local
-
   tasks:
-    - name: Wait for a ssh port become available
+    - name: Wait for SSH port
       wait_for:
-        host: "{{ trfrm.outputs.servers.value.serverip }}"
+        host: "{{ tf_output.stdout }}"
         port: 22
+        timeout: 300
 
 - name: Prepare production for deploy
   hosts: brezgina-server
+  become: yes
   vars:
-    service_path: botserver.service
-    terraform_path: tf
+    service_file: "{{ playbook_dir }}/files/botserver.service"
   tasks:
-    - block:
-        - name: Update apt cache
-          apt:
-            update_cache: yes
-          become: yes
-          async: 300
+    - name: Update apt cache
+      apt:
+        update_cache: yes
 
-        - name: Install Node.js and npm
-          apt:
-            name:
-              - nodejs
-              - npm
-            state: present
-            update_cache: yes
-          become: yes
+    - name: Install Node.js and npm
+      apt:
+        pkg:
+          - nodejs
+          - npm
+        state: present
+        update_cache: yes
 
-        - name: Install LocalTunnel globally
-          npm:
-            name: localtunnel
-            global: yes
-          become: yes
+    - name: Install LocalTunnel globally
+      npm:
+        name: localtunnel
+        global: yes
 
-        - name: Create LocalTunnel systemd unit
-          copy:
-            dest: /etc/systemd/system/localtunnel.service
-            content: |
-              [Unit]
-              Description=LocalTunnel for Telegram Bot
-              After=network.target
+    - name: Create LocalTunnel systemd unit
+      copy:
+        dest: /etc/systemd/system/localtunnel.service
+        content: |
+          [Unit]
+          Description=LocalTunnel for Telegram Bot
+          After=network.target
 
-              [Service]
-              Type=simple
-              User=ubuntu
-              ExecStart=/usr/bin/lt --port 8081 --subdomain mybot
-              Restart=always
+          [Service]
+          Type=simple
+          User=ubuntu
+          ExecStart=/usr/bin/lt --port 8081 --subdomain mybot
+          Restart=always
 
-              [Install]
-              WantedBy=multi-user.target
-          become: yes
+          [Install]
+          WantedBy=multi-user.target
 
-        - name: Enable and start LocalTunnel service
-          systemd:
-            name: localtunnel
-            enabled: yes
-            state: restarted
-          become: yes
+    - name: Enable and start LocalTunnel
+      systemd:
+        name: localtunnel
+        enabled: yes
+        state: restarted
 
-        - name: Add OpenJDK GPG key (без PPA)
-          apt_key:
-            url: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xF7C313DB11F1ED148BB5117C08B3810CB7017B89"
-            state: present
-          become: yes
+    - name: Add OpenJDK GPG key
+      apt_key:
+        url: "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xF7C313DB11F1ED148BB5117C08B3810CB7017B89"
+        state: present
 
-        - name: Add OpenJDK 21 repository manually
-          apt_repository:
-            repo: "deb [arch=amd64] https://ppa.launchpadcontent.net/openjdk-r/ppa/ubuntu {{ ansible_distribution_release }} main"
-            state: present
-            filename: "openjdk-21"
-          become: yes
+    - name: Add OpenJDK 21 repository manually
+      apt_repository:
+        repo: "deb [arch=amd64] https://ppa.launchpadcontent.net/openjdk-r/ppa/ubuntu {{ ansible_distribution_release }} main"
+        filename: openjdk-21
+        state: present
 
-        - name: Install JDK
-          apt:
-            update_cache: yes
-            name: openjdk-21-jdk-headless
-            state: present
-          become: yes
+    - name: Install OpenJDK 21
+      apt:
+        pkg: openjdk-21-jdk-headless
+        state: present
+        update_cache: yes
 
-        - name: Copy bot JAR to server
-          copy:
-            src: "../CurrencyConverterBot/target/CurrencyConverterBot-1.0-SNAPSHOT-jar-with-dependencies.jar"
-            dest: /home/ubuntu/bot.jar
-            mode: '0755'
-          become: yes
+    - name: Copy bot JAR to server
+      copy:
+        src: "{{ playbook_dir }}/bot.jar"
+        dest: /home/ubuntu/bot.jar
+        mode: '0755'
 
-        - name: Copy application.properties
-          copy:
-            src: "../application.properties"
-            dest: /home/ubuntu/application.properties
-            mode: '0644'
-          become: yes
+    - name: Copy application.properties
+      copy:
+        src: "{{ playbook_dir }}/application.properties"
+        dest: /home/ubuntu/application.properties
+        mode: '0644'
 
-        - name: Create bot app service
-          copy:
-            src: "{{ service_path }}"
-            dest: /etc/systemd/system/botserver.service
-            mode: '0644'
-          become: yes
+    - name: Deploy bot systemd service
+      copy:
+        src: "{{ service_file }}"
+        dest: /etc/systemd/system/botserver.service
+        mode: '0644'
 
-        - name: Reload services
-          systemd:
-            daemon_reload: true
-            name: botserver
-            state: stopped
-          become: yes
+    - name: Reload systemd and restart bot
+      systemd:
+        daemon_reload: yes
+        name: botserver
+        state: restarted
 
-      rescue:
-        - name: Clean up resources in case of error
-          terraform:
-            project_path: "{{ terraform_path }}"
-            state: absent
-          delegate_to: localhost
+  rescue:
+    - name: Clean up resources on failure
+      command: terraform destroy -auto-approve
+      args:
+        chdir: "{{ playbook_dir }}/tf"
