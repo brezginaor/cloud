@@ -1,4 +1,4 @@
-  ---
+---
 - name: Create production server
   hosts: localhost
   connection: local
