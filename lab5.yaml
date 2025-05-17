@@ -141,12 +141,6 @@
         dest: /home/ubuntu/bot.jar
         mode: '0755'
 
-    - name: Copy application.properties
-      copy:
-        src: "{{ playbook_dir }}/application.properties"
-        dest: /home/ubuntu/application.properties
-        mode: '0644'
-
     - name: Deploy bot systemd service
       copy:
         src: "{{ service_file }}"
