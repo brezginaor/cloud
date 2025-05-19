@@ -102,7 +102,7 @@
           [Service]
           Type=simple
           User=ubuntu
-          ExecStart=/usr/bin/lt --port 8081 --subdomain mybot
+          ExecStart=/usr/bin/lt --port 8082 --subdomain mybot
           Restart=always
 
           [Install]
