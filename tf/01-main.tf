@@ -28,7 +28,7 @@ provider "openstack" {
 
 # https://registry.terraform.io/providers/terraform-provider-openstack/openstack/latest/docs/resources/networking_secgroup_v2
 resource "openstack_networking_secgroup_v2" "sg" {
-  name = "brezgina-group-trfm1"
+  name = "brezgina-group-trfm3"
 }
 
 # https://registry.terraform.io/providers/terraform-provider-openstack/openstack/latest/docs/resources/networking_secgroup_rule_v2
